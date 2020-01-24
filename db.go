@@ -7,7 +7,7 @@ package main
 import (
 	"database/sql"
 	"fmt"
-	_ "github.com/lib/pq"
+	_ "github.com/mattn/go-sqlite3"
 	"log"
 	"os"
 )
@@ -25,12 +25,13 @@ var (
 )
 
 func init() {
-	if os.Getenv("PGCONN") == "" {
-		log.Fatal("\"$PGCONN\" not defined.")
+        log.SetFlags(log.LstdFlags | log.Lshortfile)
+	if os.Getenv("DBCONN") == "" {
+		log.Fatal("\"$DBCONN\" not defined.")
 	}
 
 	var err error
-	db, err = sql.Open("postgres", os.Getenv("PGCONN"))
+	db, err = sql.Open("sqlite3", os.Getenv("DBCONN"))
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -62,7 +63,7 @@ func init() {
 
 	genFind := func(sort string) *sql.Stmt {
 		c := `SELECT id, title, called, created
-                        FROM tasks WHERE title ~* $1
+                        FROM tasks WHERE title LIKE '%%$1%%'
                     ORDER BY %s LIMIT %d OFFSET $2`
 		stmt, err := db.Prepare(fmt.Sprintf(c, sort, entries))
 		if err != nil {
@@ -76,25 +77,25 @@ func init() {
 	}
 
 	mustExec(`CREATE TABLE IF NOT EXISTS tasks (
-                         id       SERIAL PRIMARY KEY UNIQUE,
-                         title    VARCHAR(100) NOT NULL,
-                         author   VARCHAR(100),
+                         id       INTEGER PRIMARY KEY AUTOINCREMENT,
+                         title    TEXT NOT NULL,
+                         author   TEXT,
                          discrip  TEXT,
-                         called   INT DEFAULT 0,
-                         created  TIMESTAMP DEFAULT NOW());`)
+                         called   INTEGER DEFAULT 0,
+                         created  TIMESTAMP DEFAULT CURRENT_TIMESTAMP)`)
 
 	mustExec(`CREATE TABLE IF NOT EXISTS solutions (
-		         suggested   INT DEFAULT 1,
-                         solves      INT NOT NULL REFERENCES tasks (id) ON DELETE CASCADE,
-                         solution    VARCHAR(256) NOT NULL,
-                         first       TIMESTAMP DEFAULT NOW(),
-                         last        TIMESTAMP DEFAULT NOW(),
-                         PRIMARY KEY (solution, solves))`)
+		         suggested   INTEGER DEFAULT 1,
+                         solves      INTEGER NOT NULL REFERENCES tasks (id) ON DELETE CASCADE,
+                         solution    TEXT NOT NULL,
+                         first       TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                         last        TIMESTAMP DEFAULT CURRENT_TIMESTAMP)`)
+//,                         PRIMARY KEY (solution, solves))`)
 
 	mustExec(`CREATE TABLE IF NOT EXISTS words (
                          word    VARCHAR(75) NOT NULL,
                          matches BOOL NOT NULL,
-                         task    INT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE)`)
+                         task    INTEGER NOT NULL REFERENCES tasks(id) ON DELETE CASCADE)`)
 
 	getad = genGetall("called")
 	getan = genGetall("created DESC")
@@ -109,16 +110,18 @@ func init() {
 	findpr = genFind("(SELECT COUNT(1) FROM solutions WHERE solves = id)")
 
 	create = mustPrepare(`INSERT INTO tasks (title, author, discrip)
-                                   VALUES ($1, $2, $3) RETURNING id`)
+                                   VALUES ($1, $2, $3);
+                                   SELECT last_insert_rowid()`)
 
 	create_word = mustPrepare(`INSERT INTO words (word, matches, task)
                                         VALUES ($1, $2, $3)`)
 
 	subm = mustPrepare(`INSERT INTO solutions (solution, solves)
-                                 VALUES ($1, $2)
-                            ON CONFLICT (solution, solves)
-                          DO UPDATE SET suggested = solutions.suggested + 1,
-                                             last = NOW()`)
+                                 VALUES ($1, $2)`)
+//                                  WHERE true
+//                            ON CONFLICT (solution, solves)
+//                          DO UPDATE SET suggested = solutions.suggested + 1,
+//                                             last = CURRENT_TIMESTAMP`)
 
 	getsolc = mustPrepare(`SELECT COUNT(1)
 	                       FROM solutions
@@ -139,9 +142,9 @@ func init() {
 
 	getrnd = mustPrepare(`SELECT id
                                 FROM tasks
-                            ORDER BY called / EXTRACT(EPOCH FROM created) DESC
-                              OFFSET RANDOM() * (SELECT COUNT(1) - 1 FROM tasks)
-                               LIMIT 1`)
+                            ORDER BY called / strftime('%s', created) DESC
+                               LIMIT 1
+                              OFFSET RANDOM() * (SELECT COUNT(1) - 1 FROM tasks)`)
 
 	inccou = mustPrepare(`UPDATE tasks
                                  SET called = called + 1
